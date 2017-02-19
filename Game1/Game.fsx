@@ -65,7 +65,8 @@ let mutable prev_mouse = new MouseState ()
 
 let update gameTime =
   let mouse = Mouse.GetState ()
-  if mouse.X > 0 && mouse.X < game.Window.ClientBounds.Width then
+  if mouse.X > 0 && mouse.X < game.Window.ClientBounds.Width &&
+     mouse.Y > 0 && mouse.Y < game.Window.ClientBounds.Height then
     if mouse.LeftButton = ButtonState.Pressed && prev_mouse.LeftButton = ButtonState.Released then
       let x = (mouse.X / int tile_size) % len
       let y = (mouse.Y / int tile_size) % len
