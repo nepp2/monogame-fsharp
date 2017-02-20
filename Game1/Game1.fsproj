@@ -61,6 +61,7 @@
     <None Include="LoadReferences.fsx" />
     <None Include="Game.fsx" />
     <Content Include="packages.config" />
+    <None Include="Snippets.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="MonoGame.Extended">
