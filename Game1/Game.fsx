@@ -33,32 +33,21 @@ do
   let t = new Thread(new ThreadStart(fun _ -> game.Run()))
   t.Start()
 
-// Define some grid (why?)
-let len = 16
-
-let grid =
-  let r = new System.Random ()
-  Array.init (len * len) (fun _ -> r.Next 2)
-
-let tile_size = 40.f
-let tile_colour = [| Color.White ; Color.Black |]
-
-tile_colour.[1] <- Color.Azure
-
-type tiles =
-  | Ground = 0
-  | Wall = 1
-
-
 // Define a snake
 type segment = { x : float ; y : float }
-
+(*
 type snake = {
   segments : segment array
   length : float
-
 }
+*)
+type snake = Vector2
 
+let snake = Vector2(3000.f, 3000.f)
+
+let snake2 = Vector2(3080.f, 3080.f)
+
+let segment_size = 30.f
 
 // Define a camera
 let mutable camera = Point(0, 0)
@@ -71,11 +60,7 @@ do // Load update function
     if mouse.X > 0 && mouse.X < game.Window.ClientBounds.Width &&
        mouse.Y > 0 && mouse.Y < game.Window.ClientBounds.Height then
       if mouse.LeftButton = ButtonState.Pressed && prev_mouse.LeftButton = ButtonState.Released then
-        let x = (mouse.X / int tile_size) % len
-        let y = (mouse.Y / int tile_size) % len
-        let i = y * len + x
-        grid.[i] <- 1 - grid.[i]
-  
+        ()
     prev_mouse <- mouse
 
   game.update <- update
@@ -83,18 +68,33 @@ do // Load update function
 do // load drawing function
   let draw gameTime =
     let mouse = Mouse.GetState ()
-    game.GraphicsDevice.Clear Color.Red
+    
+    let centre_x = float32 game.Window.ClientBounds.Width / 2.f
+    let centre_y = float32 game.Window.ClientBounds.Height / 2.f
+
+    let draw_snake (s : snake) =
+      let x = (s.X - snake.X) + centre_x
+      let y = (s.Y - snake.Y) + centre_y
+      let half_seg = segment_size / 2.f
+      let rect = RectangleF(x - half_seg, y - half_seg, segment_size, segment_size)
+      spriteBatch.FillRectangle(rect, Color.Aqua)
+      ()
+
+    Color(40, 40, 40) |> game.GraphicsDevice.Clear
     spriteBatch.Begin();
+
+    draw_snake snake
+    draw_snake snake2
+
     //spriteBatch.Draw(monstar, new Rectangle(0, 0, 40, 40), Color.White)
-    for i = 0 to grid.Length-1 do
-      let t = grid.[i]
-      let x = i % len |> float32
-      let y = i / len |> float32
-      let rect = RectangleF(tile_size * x, tile_size * y, tile_size, tile_size)
-      spriteBatch.FillRectangle(rect, tile_colour.[t])
-
-    //spriteBatch.FillRectangle(RectangleF(100.f, 100.f, 40.f, 40.f), tile_colour.[t])
-
+    (*
+    let t = grid.[i]
+    let x = i % len |> float32
+    let y = i / len |> float32
+    let rect = RectangleF(tile_size * x, tile_size * y, tile_size, tile_size)
+    spriteBatch.FillRectangle(rect, tile_colour.[t])
+    *)
+    // Draw mouse
     spriteBatch.DrawCircle(float32 mouse.X, float32 mouse.Y, 3.f, 10, Color.Red)
 
     spriteBatch.End();
