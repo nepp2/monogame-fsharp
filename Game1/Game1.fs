@@ -32,30 +32,83 @@ type Game1 () =
 type MList<'a> = List<'a>
 
 type snake = {
-  mutable direction : Vector2
-  mutable length : float32
-  mutable speed : float32
-  mutable head : Vector2
-  waypoints : CircularQueue<Vector2>
+    mutable direction : Vector2
+    mutable length : float32
+    mutable speed : float32
+    mutable head : Vector2
+    waypoints : CircularQueue<Vector2>
+    mutable colour : Color
+    mutable segment_gap : float32
+    mutable segment_size : float32
+  }
+
+type food = {
+  mutable pos : Vector2
   mutable colour : Color
+  mutable length : float32
+  mutable time_to_live : int
 }
+
+type CollisionGrid<'a> (collision_tile_size) =
+  let grid = Dictionary<Point, List<'a>>()
+  with
+    member private this.get_tile_index pos =
+      // TODO this calculation may be wrong on negative side of axis
+      pos / collision_tile_size |> int
+
+    member this.IterateRectangle (pos : Vector2, size : float32) = seq {
+      let half_size = size/2.f
+      let left = this.get_tile_index (pos.X - half_size)
+      let top = this.get_tile_index (pos.Y- half_size)
+      let right = this.get_tile_index (pos.X + half_size)
+      let bottom = this.get_tile_index (pos.Y + half_size)
+      for x = left to right do
+        for y = top to bottom do
+          let p = Point(x, y)
+          if grid.ContainsKey p then yield! grid.[p]
+    }
+
+    member private this.add_to_tile (tile, v) =
+      if not (grid.ContainsKey tile) then
+        grid.[tile] <- List<'a>()
+      grid.[tile].Add(v)
+
+    member this.AddPoint (pos : Vector2, v) =
+      let x = this.get_tile_index pos.X
+      let y = this.get_tile_index pos.Y
+      this.add_to_tile(Point(x, y), v)
+
+    member this.AddRectangle (centre : Vector2, size : float32, v) =
+      let half_size = size/2.f
+      let left = this.get_tile_index (centre.X - half_size)
+      let top = this.get_tile_index (centre.Y- half_size)
+      let right = this.get_tile_index (centre.X + half_size)
+      let bottom = this.get_tile_index (centre.Y + half_size)
+      for x = left to right do
+        for y = top to bottom do
+          this.add_to_tile(Point(x, y), v)
+          
 
 [<StructAttribute>]
 type Segment =
   val pos : Vector2
+  val size : float32
   val id : int
-  new(pos, id) = 
-  { pos = pos
-    id = id }
+  new(pos, size, id) = 
+    { pos = pos
+      size = size
+      id = id }
 
 let create_snake direction head colour =
   {
     direction = direction
-    length = 1000.f
+    length = 200.f
     speed = 5.f
     head = head
     waypoints = CircularQueue()
     colour = colour
+    segment_size = 30.f
+    segment_gap = 20.f
   }
 
 type System.Random with
@@ -65,12 +118,15 @@ type CircularQueue<'t> with
   member x.PeekLast = x.[x.Count-1]
   member x.FromBack i = x.[x.Count - (i+1)]
 
+let random_color (random : System.Random) =
+  let c () = random.NextFloat() * 0.5f + 0.5f
+  Color(c(), c(), c())
+
 let random_snake (random : System.Random) =
   let angle = random.NextDouble() * Math.PI * 2.0
   let direction = Vector2(Math.Cos angle |> float32, Math.Sin angle |> float32)
   let head_pos = Vector2(1000.f * random.NextFloat(), 1000.f * random.NextFloat())
-  let c () = random.NextFloat() * 0.5f + 0.5f
-  let colour = Color(c(), c(), c())
+  let colour = random_color random
   create_snake direction head_pos colour
 
 let screen_size (game : Game1) =
@@ -82,10 +138,9 @@ let mutable prev_mouse = new MouseState ()
 let mutable spriteBatch : SpriteBatch = null
 let random = new System.Random (50)
 let snakes = Seq.init 10 (fun i -> random_snake random) |> MList
+let food = MList<food>()
 
 let waypoint_gap = 30.f
-let segment_gap = 20.f
-let segment_size = 30.f
 let collision_tile_size = 60.f
 
 // ###############################################
@@ -95,11 +150,11 @@ let iter_snake s =
   seq {
     let first_waypoint_to_head = s.head - s.waypoints.PeekLast
     let first_waypoint_to_head_length = first_waypoint_to_head.Length()
-    let num_segments = s.length / segment_gap |> int
+    let num_segments = s.length / s.segment_gap |> int
     let mutable i = 0
     let mutable cont = true
     while cont && i < num_segments do
-      let segment_distance = (float32 i * segment_gap)
+      let segment_distance = (float32 i * s.segment_gap)
       let distance_from_first_waypoint_to_segment = segment_distance - first_waypoint_to_head_length
       let pos =
         if distance_from_first_waypoint_to_segment <= 0.f then
@@ -118,6 +173,22 @@ let iter_snake s =
       yield pos
       i <- i + 1
   }
+
+(*
+####### MISSING FEATURES #######
+
+- Dead snakes don't turn into food
+- There is no boundary or wrap-around
+- AI snakes don't do anything (should probably blend a basic grazing behaviour and avoidance behaviour)
+
+####### BUGGY CRAP #######
+
+- Food is too nutritious
+- Food often all despawns at once (same time to live)
+- tile lookups may be incorrect in negative space
+
+*)
+
 
 // initialise
 let initialize (game : Game1) = ()
@@ -157,52 +228,79 @@ let update (game : Game1, gameTime) =
         let new_pos = (diff / len) * waypoint_gap + last_pos
         s.waypoints.Enqueue(new_pos)
     // check whether some old waypoints should be discarded
-    let expected_len = max 1 (int s.length)
+    let expected_len = max 1 (s.length / waypoint_gap + 1.f |> int |> (*) 2)
     while expected_len < s.waypoints.Count do
       s.waypoints.Dequeue() |> ignore
 
-  // Detect collisions
-  let grid = Dictionary<Point, List<Segment>>()
-  let add_segment_to_tile (i, pos : Vector2, x, y) =
-    let tile = Point(x, y)
-    let mutable seg = Segment(pos, i)
-    if not (grid.ContainsKey tile) then
-      grid.[tile] <- List<Segment>()
-    grid.[tile].Add(seg)
-      
-  let add_to_grid (s, i, pos : Vector2) =
-    let left = (pos.X - segment_size/2.f) / collision_tile_size |> int
-    let top = (pos.Y- segment_size/2.f) / collision_tile_size |> int
-    let right = (pos.X + segment_size/2.f) / collision_tile_size |> int
-    let bottom = (pos.Y + segment_size/2.f) / collision_tile_size |> int
-    add_segment_to_tile(i, pos, left, top)
-    if left < right then add_segment_to_tile(i, pos, right, top)
-    if top < bottom then add_segment_to_tile(i, pos, left, bottom)
-    if left < right && top < bottom then add_segment_to_tile(i, pos, right, bottom)
-  
+  // Add snakes to collision grid
+  let snake_grid = CollisionGrid(60.f)
   for i = 0 to snakes.Count-1 do
     let s = snakes.[i]
     for pos in iter_snake s do
-      add_to_grid (s, i, pos)
+      snake_grid.AddRectangle(pos, s.segment_size, Segment(pos, s.segment_size, i))
 
+  // Update the food
+  let food_grid = CollisionGrid(60.f)
+  let dead_food = MList()
+  for i = 0 to food.Count-1 do
+    let f = food.[i]
+    // Check if food is dead
+    f.time_to_live <- f.time_to_live - 1
+    if f.time_to_live < 0 then
+      dead_food.Add i
+    else
+      // Add food to collision grid
+      food_grid.AddPoint(f.pos, i)
+
+  // Add more food
+  let expected_food = 200
+  if expected_food > food.Count then
+    let random_head = snakes.[random.Next(snakes.Count)].head
+    let f = {
+      colour = random_color random
+      pos = random_head + Vector2(random.NextFloat() * 1000.f - 500.f, random.NextFloat() * 1000.f - 500.f)
+      length = 5.f + random.NextFloat() * 10.f
+      time_to_live = 2000
+    }
+    food.Add f
+
+  // Detect collisions
   let test_collision head id (segment : Segment) =
     segment.id <> id &&
-    (head - segment.pos).LengthSquared() < segment_size * segment_size
+    (head - segment.pos).LengthSquared() < segment.size * segment.size
+
+  let dead_snakes = MList()
 
   for i = 0 to snakes.Count-1 do
     let s = snakes.[i]
-    let left = (s.head.X - segment_size/2.f) / collision_tile_size |> int
-    let top = (s.head.Y- segment_size/2.f) / collision_tile_size |> int
-    let right = (s.head.X + segment_size/2.f) / collision_tile_size |> int
-    let bottom = (s.head.Y + segment_size/2.f) / collision_tile_size |> int
+    // Check for collisions with food
+    let inline sqr x = x * x
+    let segment_size_squared = sqr (s.segment_size * 1.f)
+    let suction_squared = sqr (s.segment_size * 10.f)
+    for f_index in food_grid.IterateRectangle(s.head, 60.f) do
+      let f = food.[f_index]
+      let food_vec = (s.head - f.pos)
+      let food_distance = food_vec.LengthSquared()
+      if food_distance < segment_size_squared then
+        s.length <- s.length + f.length
+        dead_food.Add f_index
+      elif food_distance < suction_squared then
+        f.pos <- f.pos + (food_vec * 0.1f)
+    // Check for collisions with other snakes
     let collision =
-      [| Point(left, top) ; Point(left, bottom) ; Point(right, top) ; Point(right, bottom) |]
-      |> Seq.distinct |> Seq.collect (fun p -> if grid.ContainsKey p then grid.[p] :> seq<Segment> else Seq.empty)
+      snake_grid.IterateRectangle(s.head, s.segment_size)
       |> Seq.tryFind (test_collision s.head i)
       |> Option.isSome
     if collision then
+      dead_snakes.Add i
       s.length <- 1.f
 
+  // Remove dead snakes
+  for i = 1 to dead_snakes.Count do
+    snakes.RemoveAt dead_snakes.[dead_snakes.Count - i]
+  // Remove dead food
+  for i = 1 to dead_food.Count do
+    food.RemoveAt dead_food.[dead_food.Count - i]
 
   prev_mouse <- mouse
 
@@ -216,33 +314,33 @@ let draw (game : Game1, gameTime) =
   let camera = Vector2(screen_centre.X - player_pos.X, screen_centre.Y - player_pos.Y)
 
   // Draw a segment
-  let draw_segment (pos : Vector2, c : Color, segment_size : float32) =
-    let half_segment = segment_size / 2.f
-    let rect = RectangleF(pos.X - half_segment, pos.Y - half_segment, segment_size, segment_size)
+  let draw_rect (pos : Vector2, c : Color, size : float32) =
+    let half_segment = size / 2.f
+    let rect = RectangleF(pos.X - half_segment, pos.Y - half_segment, size, size)
     spriteBatch.FillRectangle(rect, c)
 
   // Draw a snake
   let draw_snake (camera : Vector2, s : snake) =
-    for pos in iter_snake s do
-      draw_segment (pos + camera, s.colour, segment_size)
-
+    // Draw dot trail
     let dot_size = 4.f;
-    let half_dot = dot_size / 2.f
     for i = 0 to s.waypoints.Count-1 do
-      let waypoint = s.waypoints.[i] + camera
-      let rect = RectangleF(waypoint.X - half_dot, waypoint.Y - half_dot, dot_size, dot_size)
-      spriteBatch.FillRectangle(rect, Color.White)
-    let screen_pos = s.head + camera
-    let rect = RectangleF(screen_pos.X - half_dot, screen_pos.Y - half_dot, dot_size, dot_size)
-    spriteBatch.FillRectangle(rect, Color.White)
-    
+      draw_rect (s.waypoints.[i] + camera, Color.White, dot_size)
+    // Draw segments
+    for pos in iter_snake s do
+      draw_rect (pos + camera, s.colour, s.segment_size)
 
+  
   Color(40, 40, 40) |> game.GraphicsDevice.Clear
   spriteBatch.Begin();
 
   // Draw all of the snakes
   for i = 0 to snakes.Count-1 do
     draw_snake (camera, snakes.[i])
+
+  // Draw all of the food
+  for i = 0 to food.Count-1 do
+    let f = food.[i]
+    draw_rect (f.pos + camera, f.colour, f.length/1.5f)
 
   // Draw mouse
   spriteBatch.DrawCircle(float32 mouse.X, float32 mouse.Y, 3.f, 10, Color.Red)
