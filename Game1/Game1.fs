@@ -40,6 +40,14 @@ type snake = {
   mutable colour : Color
 }
 
+[<StructAttribute>]
+type Segment =
+  val pos : Vector2
+  val id : int
+  new(pos, id) = 
+  { pos = pos
+    id = id }
+
 let create_snake direction head colour =
   {
     direction = direction
@@ -78,11 +86,43 @@ let snakes = Seq.init 10 (fun i -> random_snake random) |> MList
 let waypoint_gap = 30.f
 let segment_gap = 20.f
 let segment_size = 30.f
+let collision_tile_size = 60.f
 
 // ###############################################
 
+// helper function for iterating over the positions in a snake
+let iter_snake s =
+  seq {
+    let first_waypoint_to_head = s.head - s.waypoints.PeekLast
+    let first_waypoint_to_head_length = first_waypoint_to_head.Length()
+    let num_segments = s.length / segment_gap |> int
+    let mutable i = 0
+    let mutable cont = true
+    while cont && i < num_segments do
+      let segment_distance = (float32 i * segment_gap)
+      let distance_from_first_waypoint_to_segment = segment_distance - first_waypoint_to_head_length
+      let pos =
+        if distance_from_first_waypoint_to_segment <= 0.f then
+          s.head - (first_waypoint_to_head / first_waypoint_to_head_length) * segment_distance
+        else
+          let waypoint_index = distance_from_first_waypoint_to_segment / waypoint_gap |> int
+          if waypoint_index < s.waypoints.Count - 1 then
+            let waypoint1 = s.waypoints.FromBack waypoint_index
+            let waypoint2 = s.waypoints.FromBack (waypoint_index + 1)
+            let waypoint1_offset = float32 waypoint_index * waypoint_gap
+            let weight = (distance_from_first_waypoint_to_segment - waypoint1_offset) / waypoint_gap
+            waypoint1 * (1.f-weight) + waypoint2 * weight
+          else
+            cont <- false
+            s.waypoints.[0]
+      yield pos
+      i <- i + 1
+  }
+
+// initialise
 let initialize (game : Game1) = ()
 
+// load the content
 let load_content (game : Game1) =
   spriteBatch <- new SpriteBatch(game.GraphicsDevice)
 
@@ -121,6 +161,48 @@ let update (game : Game1, gameTime) =
     while expected_len < s.waypoints.Count do
       s.waypoints.Dequeue() |> ignore
 
+  // Detect collisions
+  let grid = Dictionary<Point, List<Segment>>()
+  let add_segment_to_tile (i, pos : Vector2, x, y) =
+    let tile = Point(x, y)
+    let mutable seg = Segment(pos, i)
+    if not (grid.ContainsKey tile) then
+      grid.[tile] <- List<Segment>()
+    grid.[tile].Add(seg)
+      
+  let add_to_grid (s, i, pos : Vector2) =
+    let left = (pos.X - segment_size/2.f) / collision_tile_size |> int
+    let top = (pos.Y- segment_size/2.f) / collision_tile_size |> int
+    let right = (pos.X + segment_size/2.f) / collision_tile_size |> int
+    let bottom = (pos.Y + segment_size/2.f) / collision_tile_size |> int
+    add_segment_to_tile(i, pos, left, top)
+    if left < right then add_segment_to_tile(i, pos, right, top)
+    if top < bottom then add_segment_to_tile(i, pos, left, bottom)
+    if left < right && top < bottom then add_segment_to_tile(i, pos, right, bottom)
+  
+  for i = 0 to snakes.Count-1 do
+    let s = snakes.[i]
+    for pos in iter_snake s do
+      add_to_grid (s, i, pos)
+
+  let test_collision head id (segment : Segment) =
+    segment.id <> id &&
+    (head - segment.pos).LengthSquared() < segment_size * segment_size
+
+  for i = 0 to snakes.Count-1 do
+    let s = snakes.[i]
+    let left = (s.head.X - segment_size/2.f) / collision_tile_size |> int
+    let top = (s.head.Y- segment_size/2.f) / collision_tile_size |> int
+    let right = (s.head.X + segment_size/2.f) / collision_tile_size |> int
+    let bottom = (s.head.Y + segment_size/2.f) / collision_tile_size |> int
+    let collision =
+      [| Point(left, top) ; Point(left, bottom) ; Point(right, top) ; Point(right, bottom) |]
+      |> Seq.distinct |> Seq.collect (fun p -> if grid.ContainsKey p then grid.[p] :> seq<Segment> else Seq.empty)
+      |> Seq.tryFind (test_collision s.head i)
+      |> Option.isSome
+    if collision then
+      s.length <- 1.f
+
 
   prev_mouse <- mouse
 
@@ -141,34 +223,12 @@ let draw (game : Game1, gameTime) =
 
   // Draw a snake
   let draw_snake (camera : Vector2, s : snake) =
-    let first_waypoint_to_head = s.head - s.waypoints.PeekLast
-    let first_waypoint_to_head_length = first_waypoint_to_head.Length()
-    let num_segments = s.length / segment_gap |> int
-    let mutable i = 0
-    let mutable cont = true
-    while cont && i < num_segments do
-      let segment_distance = (float32 i * segment_gap)
-      let distance_from_first_waypoint_to_segment = segment_distance - first_waypoint_to_head_length
-      let pos =
-        if distance_from_first_waypoint_to_segment <= 0.f then
-          s.head - (first_waypoint_to_head / first_waypoint_to_head_length) * segment_distance
-        else
-          let waypoint_index = distance_from_first_waypoint_to_segment / waypoint_gap |> int
-          if waypoint_index < s.waypoints.Count - 1 then
-            let waypoint1 = s.waypoints.FromBack waypoint_index
-            let waypoint2 = s.waypoints.FromBack (waypoint_index + 1)
-            let waypoint1_offset = float32 waypoint_index * waypoint_gap
-            let weight = (distance_from_first_waypoint_to_segment - waypoint1_offset) / waypoint_gap
-            waypoint1 * (1.f-weight) + waypoint2 * weight
-          else
-            cont <- false
-            s.waypoints.[0]
+    for pos in iter_snake s do
       draw_segment (pos + camera, s.colour, segment_size)
-      i <- i + 1
 
     let dot_size = 4.f;
     let half_dot = dot_size / 2.f
-    for i = 0 to s.waypoints.Count-2 do
+    for i = 0 to s.waypoints.Count-1 do
       let waypoint = s.waypoints.[i] + camera
       let rect = RectangleF(waypoint.X - half_dot, waypoint.Y - half_dot, dot_size, dot_size)
       spriteBatch.FillRectangle(rect, Color.White)
