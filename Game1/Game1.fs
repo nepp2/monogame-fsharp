@@ -31,10 +31,12 @@ type Game1 () =
 
 type MList<'a> = List<'a>
 
+type movement_mode = NormalMove | FastMove
+
 type snake = {
     mutable direction : Vector2
-    mutable length : float32
-    mutable speed : float32
+    mutable energy : float32
+    mutable movement_mode : movement_mode
     mutable head : Vector2
     waypoints : CircularQueue<Vector2>
     mutable colour : Color
@@ -42,12 +44,17 @@ type snake = {
     mutable segment_size : float32
   }
 
-type food = {
-  mutable pos : Vector2
-  mutable colour : Color
-  mutable length : float32
-  mutable time_to_live : int
-}
+[<StructAttribute>]
+type Food =
+  val pos : Vector2
+  val colour : Color
+  val energy : float32
+  val time_of_expiry : int
+  new(pos, colour, energy, time_of_expiry) = 
+    { pos = pos
+      colour = colour
+      energy = energy
+      time_of_expiry = time_of_expiry }
 
 type CollisionGrid<'a> (collision_tile_size) =
   let grid = Dictionary<Point, MList<'a>>()
@@ -102,21 +109,13 @@ type Segment =
 let create_snake direction head colour =
   {
     direction = direction
-    length = 200.f
-    speed = 5.f
+    energy = 200.f
+    movement_mode = NormalMove
     head = head
     waypoints = CircularQueue()
     colour = colour
     segment_size = 30.f
     segment_gap = 20.f
-  }
-
-let create_food (colour, pos, length, random : Random) =
-  {
-    colour = colour
-    pos = pos
-    length = length
-    time_to_live = 1000 + random.Next(2000)
   }
 
 type System.Random with
@@ -147,19 +146,24 @@ let mutable spriteBatch : SpriteBatch = null
 let random = new System.Random (50)
 let snake_total = 40
 let snakes = Seq.init snake_total (fun i -> random_snake random) |> MList
-let food = MList<food>()
+let food = MList<Food>()
+let maximum_food = 20000
+let mutable total_ticks = 0
 
 let waypoint_gap = 30.f
 let collision_tile_size = 60.f
 
 // ###############################################
 
+let energy_to_length energy = sqrt (energy * 100.f)
+
 // helper function for iterating over the positions in a snake
 let iter_snake s =
   seq {
     let first_waypoint_to_head = s.head - s.waypoints.PeekLast
     let first_waypoint_to_head_length = first_waypoint_to_head.Length()
-    let num_segments = s.length / s.segment_gap |> int
+    let length = (energy_to_length s.energy)
+    let num_segments = length / s.segment_gap |> int
     let mutable i = 0
     let mutable cont = true
     while cont && i < num_segments do
@@ -186,6 +190,7 @@ let iter_snake s =
 (*
 ####### MISSING FEATURES #######
 
+- There is no background grid
 - There is no boundary or wrap-around
 - There should be a maximum turning speed
 - AI snakes don't do anything
@@ -200,31 +205,28 @@ let iter_snake s =
 ####### BUGGY CRAP #######
 
 - tile lookups may be incorrect in negative space
-- performance issues due to huge particle counts
-  - snakes should decompose into fewer particles
-  - number of food particles should have a hard cap (despawn random particle if necessary)
-  - turn food into a struct
-  - particles are not dropped according to dead snake's segment size (making it unclear how many are needed)
-- snakes suck in food too far away, and very quickly
-- collisions are all wrong
-  - not passing the right rectangles to collision grids
-  - not averaging between segment sizes of different snakes
-- Snakes get way too big. Growth should probably be more logarithmic.
 
 *)
 
+let spawn_food (colour, pos, length) =
+  Food(pos, colour, length, total_ticks + 1000 + random.Next(2000))
+
 let spawn_dead_snake_food s =
   let spawn_positions = iter_snake s |> Seq.toArray
-  let food_per_segment = s.length / float32 spawn_positions.Length
-  for pos in spawn_positions do
-    let mutable seg_food = food_per_segment
-    while seg_food > 0.f do
-      let r = random.NextFloat()
-      let length = 1.f + (r * r) * 10.f
-      seg_food <- seg_food - length
-      let food_pos = pos + Vector2(random.NextFloat() * 20.f - 10.f, random.NextFloat() * 20.f - 10.f)
-      food.Add (create_food (s.colour, food_pos, length, random))
+  let length_factor = 10.f * (s.segment_size / 30.f)
+  let mutable food_remaining = s.energy
+  while food_remaining > 0.f do  
+    let r = random.NextFloat()
+    let length = 1.f + (r * r) * length_factor
+    food_remaining <- food_remaining - length
+    let pos = spawn_positions.[random.Next(spawn_positions.Length)]
+    let size = s.segment_size * 1.2f
+    let half = size / 2.f
+    let food_pos = pos + Vector2(random.NextFloat() * size - half, random.NextFloat() * size - half)
+    food.Add (spawn_food (s.colour, food_pos, length))
 
+let speed mode =
+  match mode with NormalMove -> 5.f | FastMove -> 10.f
 
 // initialise
 let initialize (game : Game1) = ()
@@ -234,7 +236,8 @@ let load_content (game : Game1) =
   spriteBatch <- new SpriteBatch(game.GraphicsDevice)
 
 // Update the game
-let update (game : Game1, gameTime) =
+let update (game : Game1, gameTime : GameTime) =
+  total_ticks <- total_ticks + 1
 
   let player = snakes.[0]
   let screen_centre = screen_size(game) / 2.f
@@ -246,6 +249,20 @@ let update (game : Game1, gameTime) =
     let mouse_world_pos = Vector2(float32 mouse.X, float32 mouse.Y) + player.head - screen_centre
     player.direction <- mouse_world_pos - player.head
     player.direction.Normalize()
+  player.movement_mode <- if mouse.LeftButton = ButtonState.Pressed then FastMove else NormalMove
+
+    // Moderate the food level
+  do // Make some food
+    let random_head = snakes.[random.Next(snakes.Count)].head
+    let pos = random_head + Vector2(random.NextFloat() * 1000.f - 500.f, random.NextFloat() * 1000.f - 500.f)
+    let f = spawn_food(random_color random, pos, 1.f + random.NextFloat() * 4.f)
+    food.Add f
+  if maximum_food < food.Count then
+    let threshold = float32 maximum_food * 0.9f |> int
+    while threshold < food.Count do
+      let i = random.Next(food.Count)
+      food.[i] <- food.[food.Count-1]
+      food.RemoveAt(food.Count-1)
 
   // Update the food
   let food_grid = CollisionGrid(400.f)
@@ -253,8 +270,7 @@ let update (game : Game1, gameTime) =
   for i = 0 to food.Count-1 do
     let f = food.[i]
     // Check if food is dead
-    f.time_to_live <- f.time_to_live - 1
-    if f.time_to_live < 0 then
+    if f.time_of_expiry < total_ticks then
       dead_food.Add i
     else
       // Add food to collision grid
@@ -264,27 +280,15 @@ let update (game : Game1, gameTime) =
   if snakes.Count < snake_total then
     snakes.Add (random_snake random)
 
-  // Add more food
-  let expected_food = 40000 //snakes.Count * 20
-  while expected_food > food.Count do
-    let random_head = snakes.[random.Next(snakes.Count)].head
-    let f = {
-      colour = random_color random
-      pos = random_head + Vector2(random.NextFloat() * 1000.f - 500.f, random.NextFloat() * 1000.f - 500.f)
-      length = 1.f + random.NextFloat() * 4.f
-      time_to_live = 1000 + random.Next(2000)
-    }
-    food.Add f
-
   // Update positions and size
   for i = 0 to snakes.Count-1 do
     let s = snakes.[i]
+    // Terrible AI
     if i > 0 then
-      // Terrible AI
       let fs =
         food_grid.IterateRectangle(s.head, 200.f)
         |> Seq.map (fun i -> food.[i])
-        |> Seq.map (fun f -> f, (f.pos - s.head).Length() / f.length)
+        |> Seq.map (fun f -> f, (f.pos - s.head).Length() / f.energy)
       let pos =
         if Seq.isEmpty fs |> not then
           (fs |> Seq.minBy snd |> fst).pos
@@ -293,10 +297,12 @@ let update (game : Game1, gameTime) =
           enemy.head + enemy.direction * 100.f
       s.direction <- pos - s.head
       s.direction.Normalize()
-
+      if Single.IsNaN s.direction.X || Single.IsNaN s.direction.Y then
+        printf "whoopsie"
+    // Move the snake
     let dir = s.direction
     dir.Normalize()
-    s.head <- s.head + (dir * s.speed)
+    s.head <- s.head + dir * (speed s.movement_mode)
     // check whether a new waypoint needs to be recorded
     if s.waypoints.Count = 0 then
       s.waypoints.Enqueue(s.head)
@@ -308,12 +314,12 @@ let update (game : Game1, gameTime) =
         let new_pos = (diff / len) * waypoint_gap + last_pos
         s.waypoints.Enqueue(new_pos)
     // check whether some old waypoints should be discarded
-    let expected_len = max 1 (s.length / waypoint_gap + 1.f |> int)
+    let length = energy_to_length s.energy
+    let expected_len = max 1 (length / waypoint_gap + 1.f |> int)
     while expected_len < s.waypoints.Count do
       s.waypoints.Dequeue() |> ignore
     // Update the snake segment size
-    s.segment_size <- 10.f + sqrt(s.length)
-    s.segment_gap <- 20.f
+    s.segment_size <- 20.f + sqrt(s.energy) * 0.3f
 
   // Add snakes to collision grid
   let snake_grid = CollisionGrid(400.f)
@@ -323,9 +329,11 @@ let update (game : Game1, gameTime) =
       snake_grid.AddRectangle(pos, s.segment_size, Segment(pos, s.segment_size, i))
 
   // Detect collisions
-  let test_collision head id (segment : Segment) =
-    segment.id <> id &&
-    (head - segment.pos).LengthSquared() < segment.size * segment.size
+  let test_collision s id (segment : Segment) =
+    if segment.id = id then false
+    else
+      let radius = (segment.size + s.segment_size) / 4.f
+      (s.head - segment.pos).LengthSquared() < radius * radius
 
   let dead_snakes = MList()
 
@@ -333,26 +341,29 @@ let update (game : Game1, gameTime) =
     let s = snakes.[i]
     // Check for collisions with food
     let inline sqr x = x * x
-    let segment_size_squared = sqr (s.segment_size * 1.f)
-    let suction_squared = sqr (s.segment_size * 10.f)
-    for f_index in food_grid.IterateRectangle(s.head, 60.f) do
+    let segment_radius = s.segment_size * 0.5f
+    let segment_squared = sqr segment_radius
+    let suction_radius = s.segment_size * 3.f
+    let suction_squared = sqr suction_radius
+    for f_index in food_grid.IterateRectangle(s.head, suction_radius * 2.f) do
       let f = food.[f_index]
       let food_vec = (s.head - f.pos)
-      let food_distance = food_vec.LengthSquared()
-      if food_distance < segment_size_squared then
-        s.length <- s.length + f.length
+      let food_distance_squared = food_vec.LengthSquared()
+      if food_distance_squared < segment_squared then
+        s.energy <- s.energy + f.energy
         dead_food.Add f_index
-      elif food_distance < suction_squared then
-        f.pos <- f.pos + (food_vec * 0.1f)
+      elif food_distance_squared < suction_squared then
+        let food_distance = sqrt food_distance_squared
+        let new_pos = f.pos + (food_vec * (segment_radius / food_distance) * 0.3f) + (s.direction * (speed s.movement_mode))
+        food.[f_index] <- Food(new_pos, f.colour, f.energy, f.time_of_expiry)
     // Check for collisions with other snakes
     let collision =
       snake_grid.IterateRectangle(s.head, s.segment_size)
-      |> Seq.tryFind (test_collision s.head i)
+      |> Seq.tryFind (test_collision s i)
       |> Option.isSome
     if collision then
       spawn_dead_snake_food s
       dead_snakes.Add i
-      s.length <- 1.f
 
   // Remove dead snakes
   if dead_snakes.Count > 0 then
@@ -371,7 +382,8 @@ let update (game : Game1, gameTime) =
 let draw (game : Game1, gameTime) =
   let mouse = Mouse.GetState ()
    
-  let screen_centre = screen_size(game) / 2.f
+  let screen = screen_size(game)
+  let screen_centre = screen / 2.f
 
   let player_pos = snakes.[0].head
   let camera = Vector2(screen_centre.X - player_pos.X, screen_centre.Y - player_pos.Y)
@@ -398,6 +410,20 @@ let draw (game : Game1, gameTime) =
   Color(40, 40, 40) |> game.GraphicsDevice.Clear
   spriteBatch.Begin();
 
+  // Draw a grid in the background
+  let grid_colour = Color(0.1f, 0.1f, 0.1f)
+  let tile_size = 70.f
+  let grid_width = screen.X / tile_size |> int |> (+) 1
+  let grid_height = screen.Y / tile_size |> int |> (+) 1
+  let grid_offset_x = player_pos.X % tile_size
+  let grid_offset_y = player_pos.Y % tile_size
+  for x = 0 to grid_width do
+    let x = (float32 x * tile_size) - grid_offset_x
+    spriteBatch.DrawLine(x, 0.f, x, screen.Y, grid_colour, 2.f)
+  for y = 0 to grid_height do
+    let y = (float32 y * tile_size) - grid_offset_y
+    spriteBatch.DrawLine(0.f, y, screen.X, y, grid_colour, 2.f)
+      
   // Draw all of the snakes
   for i = 0 to snakes.Count-1 do
     draw_snake (camera, snakes.[i])
@@ -405,10 +431,10 @@ let draw (game : Game1, gameTime) =
   // Draw all of the food
   for i = 0 to food.Count-1 do
     let f = food.[i]
-    draw_rect (f.pos + camera, f.colour, f.length * 2.f)
+    draw_rect (f.pos + camera, f.colour, f.energy * 2.f)
 
   // Draw mouse
-  spriteBatch.DrawCircle(float32 mouse.X, float32 mouse.Y, 3.f, 10, Color.Red)
+  spriteBatch.DrawCircle(float32 mouse.X, float32 mouse.Y, 9.f, 4, Color.White, 3.f)
 
   spriteBatch.End();
 
