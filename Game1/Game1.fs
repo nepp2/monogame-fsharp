@@ -50,7 +50,7 @@ type food = {
 }
 
 type CollisionGrid<'a> (collision_tile_size) =
-  let grid = Dictionary<Point, List<'a>>()
+  let grid = Dictionary<Point, MList<'a>>()
   with
     member private this.get_tile_index pos =
       // TODO this calculation may be wrong on negative side of axis
@@ -70,7 +70,7 @@ type CollisionGrid<'a> (collision_tile_size) =
 
     member private this.add_to_tile (tile, v) =
       if not (grid.ContainsKey tile) then
-        grid.[tile] <- List<'a>()
+        grid.[tile] <- new MList<'a>()
       grid.[tile].Add(v)
 
     member this.AddPoint (pos : Vector2, v) =
@@ -186,14 +186,30 @@ let iter_snake s =
 (*
 ####### MISSING FEATURES #######
 
-- Dead snakes don't turn into food
 - There is no boundary or wrap-around
-- AI snakes don't do anything (should probably blend a basic grazing behaviour and avoidance behaviour)
-- New snakes never appear
+- There should be a maximum turning speed
+- AI snakes don't do anything
+  - Grazing behaviour
+  - Avoidance behaviour
+  - Attacking behaviour
+  - (Evolve the weightings of these parameters?)
+- Snakes are not able to spend energy moving more quickly
+- Snakes are a bit ugly (maybe there should be a circle sprite?)
+- Food is a bit ugly (should have a graphical effect, or a different sprite?)
 
 ####### BUGGY CRAP #######
 
 - tile lookups may be incorrect in negative space
+- performance issues due to huge particle counts
+  - snakes should decompose into fewer particles
+  - number of food particles should have a hard cap (despawn random particle if necessary)
+  - turn food into a struct
+  - particles are not dropped according to dead snake's segment size (making it unclear how many are needed)
+- snakes suck in food too far away, and very quickly
+- collisions are all wrong
+  - not passing the right rectangles to collision grids
+  - not averaging between segment sizes of different snakes
+- Snakes get way too big. Growth should probably be more logarithmic.
 
 *)
 
@@ -231,9 +247,8 @@ let update (game : Game1, gameTime) =
     player.direction <- mouse_world_pos - player.head
     player.direction.Normalize()
 
-
   // Update the food
-  let food_grid = CollisionGrid(60.f)
+  let food_grid = CollisionGrid(400.f)
   let dead_food = MList()
   for i = 0 to food.Count-1 do
     let f = food.[i]
@@ -250,8 +265,8 @@ let update (game : Game1, gameTime) =
     snakes.Add (random_snake random)
 
   // Add more food
-  let expected_food = snakes.Count * 20
-  if expected_food > food.Count then
+  let expected_food = 40000 //snakes.Count * 20
+  while expected_food > food.Count do
     let random_head = snakes.[random.Next(snakes.Count)].head
     let f = {
       colour = random_color random
@@ -301,7 +316,7 @@ let update (game : Game1, gameTime) =
     s.segment_gap <- 20.f
 
   // Add snakes to collision grid
-  let snake_grid = CollisionGrid(60.f)
+  let snake_grid = CollisionGrid(400.f)
   for i = 0 to snakes.Count-1 do
     let s = snakes.[i]
     for pos in iter_snake s do
@@ -340,17 +355,15 @@ let update (game : Game1, gameTime) =
       s.length <- 1.f
 
   // Remove dead snakes
-  dead_snakes.Sort()
-  for i = 1 to dead_snakes.Count do
-    let i = dead_snakes.[dead_snakes.Count - i]
-    snakes.[i] <- snakes.[snakes.Count-1]
-    snakes.RemoveAt(snakes.Count-1)
-  // Remove dead food
-  dead_food.Sort()
-  for i = 1 to dead_food.Count do
-    let i = dead_food.[dead_food.Count - i]
-    food.[i] <- food.[food.Count-1]
-    food.RemoveAt(food.Count-1)
+  if dead_snakes.Count > 0 then
+    for i in dead_snakes |> Seq.distinct |> Seq.sortDescending do
+      snakes.[i] <- snakes.[snakes.Count-1]
+      snakes.RemoveAt(snakes.Count-1)
+    // Remove dead food
+  if dead_food.Count > 0 then
+    for i in dead_food |> Seq.distinct |> Seq.sortDescending do
+      food.[i] <- food.[food.Count-1]
+      food.RemoveAt(food.Count-1)
 
   prev_mouse <- mouse
 
