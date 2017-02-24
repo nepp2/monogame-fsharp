@@ -6,6 +6,8 @@ open Engine
 let degrees_to_radians d = d * (float32 Math.PI / 180.f)
 let radians_to_degrees r = r * (180.f / float32 Math.PI)
 
+let is_broken_float f = Single.IsNaN f || Single.IsInfinity f
+
 let square_to_rect (pos : Vector2) (size : float32) =
   let half_size = size/2.f
   RectangleF(pos.X - half_size, pos.Y- half_size, size, size)

@@ -21,6 +21,11 @@ type Action =
     { dir = dir
       mode = mode }
 
+type snake_controller =
+  | Human
+  | AlphaSlither of float32[]
+  | DumbAI
+
 type snake = {
     mutable direction : Vector2
     mutable energy : float32
@@ -32,10 +37,10 @@ type snake = {
     mutable segment_gap : float32
     mutable segment_size : float32
     mutable poop_cycle : int
-    mutable ai : game -> snake -> int -> Action
+    mutable controller : snake_controller
   }
 
-let create_snake direction head colour ai =
+let create_snake direction head colour controller =
   {
     direction = direction
     energy = 200.f
@@ -47,7 +52,7 @@ let create_snake direction head colour ai =
     segment_size = 30.f
     segment_gap = 20.f
     poop_cycle = 0
-    ai = ai
+    controller = controller
   }
 
 [<StructAttribute>]
@@ -65,7 +70,7 @@ type Food =
   val pos : Vector2
   val colour : Color
   val energy : float32
-  val time_of_expiry : int
+  val time_of_expiry : int64
   new(pos, colour, energy, time_of_expiry) = 
     { pos = pos
       colour = colour

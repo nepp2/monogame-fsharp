@@ -11,6 +11,9 @@ open System.Collections.Generic
 open System
 open C5
 
+type Keyboard = Microsoft.Xna.Framework.Input.Keyboard
+type KeyboardState = Microsoft.Xna.Framework.Input.KeyboardState
+type Keys = Microsoft.Xna.Framework.Input.Keys
 type Mouse = Microsoft.Xna.Framework.Input.Mouse
 type MouseState = Microsoft.Xna.Framework.Input.MouseState
 type ButtonState = Microsoft.Xna.Framework.Input.ButtonState
