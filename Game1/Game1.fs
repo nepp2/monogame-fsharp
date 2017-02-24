@@ -36,7 +36,9 @@ let maximum_food = 20000
 let mutable total_ticks = 0
 let world_size = 7000.f
 
-let max_turn_speed = 5.f
+let max_turn_speed = 8.f
+let normal_speed = 4.f
+let fast_speed = 8.f
 
 let waypoint_gap = 30.f
 let collision_tile_size = 400.f
@@ -47,48 +49,9 @@ let mutable snake_grid = CollisionGrid<Segment>(collision_tile_size)
 let dead_food = MList<int>()
 let dead_snakes = MList<int>()
 
-// ################### GAME AI ###################
-
-module AI =
-
-  let player_control (game : game) s =
-    let screen_centre = get_screen_size(game) / 2.f
-    let mouse = Mouse.GetState ()
-    let bounds = game.RenderBounds
-    let dir =
-      if mouse.X > 0 && mouse.X < bounds.Width &&
-          mouse.Y > 0 && mouse.Y < bounds.Height then
-        let mouse_world_pos = Vector2(float32 mouse.X, float32 mouse.Y) + s.head - screen_centre
-        mouse_world_pos - s.head
-      else
-        s.direction
-    let mode = if mouse.LeftButton = ButtonState.Pressed then FastMove else NormalMove
-    Action (dir, mode)
-
-  let dumb_ai game s =
-    let fs =
-      food_grid.IterateSquare(s.head, 200.f)
-      |> Seq.map (fun i -> food.[i])
-      |> Seq.map (fun f -> f, (f.pos - s.head).Length() / f.energy)
-    let pos =
-      if Seq.isEmpty fs |> not then
-        (fs |> Seq.minBy snd |> fst).pos
-      else
-        let i = (s.colour.GetHashCode() |> abs) % snakes.Count
-        let enemy = snakes.[i]
-        let enemy_dir = enemy.direction
-        enemy_dir.Normalize()
-        enemy.head + enemy_dir * 100.f
-    let dir = pos - s.head
-    Action (dir, NormalMove)
-
-// ###############################################
+// ################ Helper stuff #################
 
 let energy_to_length energy = sqrt (energy * 100.f)
-
-let random_color (random : System.Random) =
-  let c () = random.NextFloat() * 0.5f + 0.5f
-  Color(c(), c(), c())
 
 /// helper function for interpolating snake body positions
 let get_position_at_length_helper (s, length, first_waypoint_to_head, first_waypoint_to_head_length) =
@@ -115,16 +78,172 @@ let get_position_at_length (s, length) =
 /// helper function for iterating over the positions in a snake
 let iter_snake s =
   seq {
-    let first_waypoint_to_head = s.head - s.waypoints.PeekLast
-    let first_waypoint_to_head_length = first_waypoint_to_head.Length()
-    let length = (energy_to_length s.energy)
-    let num_segments = length / s.segment_gap |> int
-    let mutable i = 0
-    for i = 0 to num_segments-1 do
-      let segment_distance = (float32 i * s.segment_gap)
-      let pos = get_position_at_length_helper(s, segment_distance, first_waypoint_to_head, first_waypoint_to_head_length)
-      yield pos
+    if s.waypoints.Count > 0 then
+      let first_waypoint_to_head = s.head - s.waypoints.PeekLast
+      let first_waypoint_to_head_length = first_waypoint_to_head.Length()
+      let length = (energy_to_length s.energy)
+      let num_segments = length / s.segment_gap |> int
+      let mutable i = 0
+      for i = 0 to num_segments-1 do
+        let segment_distance = (float32 i * s.segment_gap)
+        let pos = get_position_at_length_helper(s, segment_distance, first_waypoint_to_head, first_waypoint_to_head_length)
+        yield pos
   }
+
+
+// ################### GAME AI ###################
+
+module AI =
+
+  let player_control (game : game) s id =
+    let screen_centre = get_screen_size(game) / 2.f
+    let mouse = Mouse.GetState ()
+    let bounds = game.RenderBounds
+    let dir =
+      if mouse.X > 0 && mouse.X < bounds.Width &&
+          mouse.Y > 0 && mouse.Y < bounds.Height then
+        let mouse_world_pos = Vector2(float32 mouse.X, float32 mouse.Y) + s.head - screen_centre
+        mouse_world_pos - s.head
+      else
+        s.direction
+    let mode = if mouse.LeftButton = ButtonState.Pressed then FastMove else NormalMove
+    Action (dir, mode)
+
+  let alpha_slither (weights : float32[]) game s id =
+    let radius = 400.f
+    let eat_distance_weight = weights.[0]
+    let eat_energy_weight = weights.[1]
+    let danger_distance_weight = weights.[2]
+    let hunt_distance_weight = weights.[3]
+    let hunt_orbit_weight = weights.[4]
+    let hunt_size_weight = weights.[5]
+    let eat_decision_weight = weights.[6]
+    let danger_decision_weight = weights.[7]
+    let hunt_decision_weight = weights.[8]
+    let speed_threshold = weights.[9]
+
+    // grazing
+    let eat_vec, eat_weight =
+      let mutable v = Vector2()
+      let mutable total_weight = 0.f
+      for i in food_grid.IterateSquare(s.head, radius * 2.f) do
+        let f = food.[i]
+        let dir = f.pos - s.head
+        let len = dir.Length()
+        if len < radius then
+          let distance_weight = ((radius - len) / radius) * eat_distance_weight
+          let energy_weight = f.energy * eat_energy_weight
+          v <- v + (dir / len) * (distance_weight + energy_weight)
+          total_weight <- total_weight + distance_weight + energy_weight
+      v, total_weight
+
+    // danger
+    let danger_vec, danger_weight =
+      let mutable v = Vector2()
+      let mutable total_weight = 0.f
+      for seg in snake_grid.IterateSquare(s.head, radius * 2.f) |> Seq.distinct do
+        if seg.id <> id then
+          let dir = s.head - seg.pos
+          let dir_len = dir.Length()
+          let len = dir_len - (s.segment_size + seg.size) / 2.f
+          if len < radius then
+            let weight = ((radius - len) / radius) * danger_distance_weight
+            v <- v + (dir / dir_len) * weight
+            total_weight <- total_weight + weight
+      let head_rect = square_to_rect s.head s.segment_size
+      for r in boundary_grid.IterateSquare(s.head, radius * 2.f) |> Seq.distinct do
+        let dir = rect_closest_vector_from_to r head_rect
+        let len = dir.Length()
+        if len < radius then
+          let weight = ((radius - len) / radius) * danger_distance_weight
+          v <- v + (dir / len) * weight
+          total_weight <- total_weight + weight
+      v, total_weight
+
+    // Hunt
+    let hunt_vec, hunt_weight =
+      let mutable v = Vector2()
+      let mutable total_weight = 0.f
+      let nearby_snakes =
+        snake_grid.IterateSquare(s.head, radius * 2.f)
+        |> Seq.map (fun seg -> seg.id) |> Seq.distinct
+      let next_pos = s.head + s.direction.Normalized() * s.speed
+      for i in nearby_snakes do
+        if i <> id then
+          let centre_of_mass s samples =
+            let snake_length = energy_to_length s.energy
+            let mutable sum_pos = Vector2()
+            for v = 1 to samples do
+              sum_pos <- sum_pos + get_position_at_length (s, (snake_length / float32 samples) * float32 v)
+            sum_pos / (float32 samples)
+
+          let enemy = snakes.[i]
+          let ideal_orbit_radius = (s.segment_size + enemy.segment_size) * 0.5f + hunt_orbit_weight * 500.f
+          let next_enemy_pos = enemy.head + enemy.direction.Normalized() * enemy.speed
+          let ideal_orbit_location = (next_pos - next_enemy_pos).Normalized() * ideal_orbit_radius + next_enemy_pos
+          let dir = ideal_orbit_location - s.head
+          let len = dir.Length()
+          let distance_weight = ((radius - len) / radius) * hunt_distance_weight
+          let size_weight = enemy.segment_size * hunt_size_weight
+          v <- v + (dir / len) * (distance_weight + size_weight)
+          total_weight <- total_weight + distance_weight + size_weight
+          (*
+          let overshoot =
+            enemy.direction.Normalized() *
+            (enemy.segment_size * 0.5f + hunt_orbit_weight * 500.f)
+
+          let dir = (enemy.head + overshoot) - s.head
+          let dir_len = dir.Length()
+          let len = dir_len - (s.segment_size + enemy.segment_size) / 2.f
+          if len < radius then
+            let distance_weight = ((radius - len) / radius) * hunt_distance_weight
+            let energy_weight = enemy.energy * hunt_energy_weight
+            v <- v + (dir / len) * (distance_weight + energy_weight)
+            total_weight <- total_weight + distance_weight + energy_weight
+          *)
+      v, total_weight
+
+    // Otherwise
+    let kamikaze_vec =
+      let enemy = snakes.[(id+1) % snakes.Count]
+      let enemy_pos = enemy.head + enemy.direction.Normalized() * 100.f
+      enemy_pos - s.head
+
+    let options = [|
+      eat_weight * eat_decision_weight, eat_vec
+      danger_weight * danger_decision_weight, danger_vec
+      hunt_weight * hunt_decision_weight, hunt_vec
+      Single.Epsilon, kamikaze_vec
+    |]
+    let max = options |> Array.maxBy fst
+    let direction = snd max
+    let move = if (fst max) > speed_threshold * 500.f then FastMove else NormalMove
+    Console.WriteLine("Eat: {0}, Danger: {0}, Hunt: {0}", fst options.[0], fst options.[1], fst options.[2])
+    Action(direction, move)
+
+  let alpha_slither_random_weights game s id =
+    let weights = Array.init 10 (fun _ -> random.NextFloat())
+    alpha_slither weights game s id
+
+  let dumb_ai game s id =
+    let fs =
+      food_grid.IterateSquare(s.head, 200.f)
+      |> Seq.map (fun i -> food.[i])
+      |> Seq.map (fun f -> f, (f.pos - s.head).Length() / f.energy)
+    let pos =
+      if Seq.isEmpty fs |> not then
+        (fs |> Seq.minBy snd |> fst).pos
+      else
+        let enemy = snakes.[(id+1) % snakes.Count]
+        enemy.head + enemy.direction.Normalized() * 100.f
+    let dir = pos - s.head
+    Action (dir, NormalMove)
+
+// ###############################################
+
+let random_color (random : System.Random) =
+  let c () = random.NextFloat() * 0.5f + 0.5f
+  Color(c(), c(), c())
 
 /// Used to fade a snake's colour a bit for food created from its body
 let colour_fade (c : Color) =
@@ -133,16 +252,16 @@ let colour_fade (c : Color) =
   v / factor |> Color
 
 /// Spawn a snake somewhere. Try to avoid other snakes.
-let rec spawn_random_snake (random : System.Random) ai =
+let rec spawn_random_snake (random : System.Random) =
   let angle = random.NextDouble() * Math.PI * 2.0
   let direction = Vector2(Math.Cos angle |> float32, Math.Sin angle |> float32)
   let head_pos = Vector2(world_size * random.NextFloat(), world_size * random.NextFloat())
   let too_close = snakes.Exists(fun s -> (s.head - head_pos).LengthSquared() < 150.f * 150.f)
   if too_close then
-    spawn_random_snake random ai
+    spawn_random_snake random
   else
     let colour = random_color random
-    create_snake direction head_pos colour ai
+    create_snake direction head_pos colour AI.alpha_slither_random_weights
 
 /// Spawn food with standard time-to-live
 let spawn_food (colour, pos, energy) =
@@ -167,7 +286,7 @@ let spawn_dead_snake_food s =
 // initialise
 let initialize (game : game) =
   // Spawn some snakes
-  Seq.init snake_total (fun i -> spawn_random_snake random AI.dumb_ai) |> snakes.AddRange
+  Seq.init snake_total (fun i -> spawn_random_snake random) |> snakes.AddRange
   // Initialise the walls
   let width = world_size
   let height = world_size
@@ -184,7 +303,7 @@ let initialize (game : game) =
 let handle_movement_speed s =
   s.speed <-
     match s.movement_mode with
-      | NormalMove -> 5.f
+      | NormalMove -> normal_speed
       | FastMove ->
         let max_poop_size = s.segment_size / 4.f
         let min_energy = 30.f + max_poop_size
@@ -198,9 +317,9 @@ let handle_movement_speed s =
               get_position_at_length(s, energy_to_length s.energy) +
               Vector2(random.NextFloat() * 10.f - 5.f, random.NextFloat() * 10.f - 5.f)
             spawn_food (colour_fade s.colour, pos, energy_loss) |> food.Add
-          10.f
+          fast_speed
         else
-          5.f
+          normal_speed
 
 let clean_up_previous_frame () =
   // Remove dead snakes
@@ -259,25 +378,29 @@ let update (game : game, gameTime : GameTime) =
       food.[i] <- food.[food.Count-1]
       food.RemoveAt(food.Count-1)
 
-  // Update the food
+  // Add more snakes
+  if snakes.Count < snake_total then
+    snakes.Add (spawn_random_snake random)
+
+  // Add food to collision grid, and remove old food
   for i = 0 to food.Count-1 do
     let f = food.[i]
-    // Check if food is dead
     if f.time_of_expiry < total_ticks then
       dead_food.Add i
     else
-      // Add food to collision grid
       food_grid.AddPoint(f.pos, i)
 
-  // Add more snakes
-  if snakes.Count < snake_total then
-    snakes.Add (spawn_random_snake random AI.dumb_ai)
+  // Add snakes to collision grid
+  for i = 0 to snakes.Count-1 do
+    let s = snakes.[i]
+    for pos in iter_snake s do
+      snake_grid.AddSquare(pos, s.segment_size, Segment(pos, s.segment_size, i))
 
-  // Update positions and size
+  // Update snake positions
   for i = 0 to snakes.Count-1 do
     let s = snakes.[i]
     // Run AI
-    let action = s.ai game s
+    let action = s.ai game s i
     change_direction s action.dir
     s.movement_mode <- action.mode
     // Update the snake's speed
@@ -303,12 +426,6 @@ let update (game : game, gameTime : GameTime) =
       s.waypoints.Dequeue() |> ignore
     // Update the snake segment size
     s.segment_size <- 20.f + sqrt(s.energy) * 0.3f
-
-  // Add snakes to collision grid
-  for i = 0 to snakes.Count-1 do
-    let s = snakes.[i]
-    for pos in iter_snake s do
-      snake_grid.AddSquare(pos, s.segment_size, Segment(pos, s.segment_size, i))
 
   // Detect collisions
   let test_collision s id (segment : Segment) =

@@ -32,7 +32,7 @@ type snake = {
     mutable segment_gap : float32
     mutable segment_size : float32
     mutable poop_cycle : int
-    mutable ai : game -> snake -> Action
+    mutable ai : game -> snake -> int -> Action
   }
 
 let create_snake direction head colour ai =

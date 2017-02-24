@@ -23,6 +23,12 @@ type GameTime = Microsoft.Xna.Framework.GameTime
 /// Mutable list (alias for C# List)
 type MList<'a> = System.Collections.Generic.List<'a>
 
+type Microsoft.Xna.Framework.Vector2 with
+  member x.Normalized() =
+    let v = x
+    v.Normalize()
+    v
+
 type private Game1 () =
   inherit Game()
 
