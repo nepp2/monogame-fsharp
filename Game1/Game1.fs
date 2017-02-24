@@ -37,7 +37,8 @@ let maximum_food = 20000
 let mutable total_ticks = 0L
 let world_size = 7000.f
 
-let last_dump_time = 0
+let mutable last_dump_time = 0
+let init_snakes_from_json = true
 
 let max_turn_speed = 8.f
 let normal_speed = 4.f
@@ -108,6 +109,10 @@ let json_dump_weights () =
   let s = Newtonsoft.Json.JsonConvert.SerializeObject(genepool |> Seq.toArray)
   let path = sprintf @"..\..\evolved_weights\weights_%s.json" (DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"))
   File.WriteAllText(path, s)
+
+let json_load_weights path =
+  let s = File.ReadAllText path
+  Newtonsoft.Json.JsonConvert.DeserializeObject<array<array<float32> * float32>>(s)
 
 
 // ################### GAME AI ###################
@@ -215,8 +220,8 @@ module AI =
       enemy_pos - s.head
 
     let options = [|
-      //eat_weight * eat_decision_weight, eat_vec
-      //danger_weight * danger_decision_weight, danger_vec
+      eat_weight * eat_decision_weight, eat_vec
+      danger_weight * danger_decision_weight, danger_vec
       hunt_weight * hunt_decision_weight, hunt_vec
       Single.Epsilon, kamikaze_vec
     |]
@@ -333,7 +338,12 @@ let handle_death s =
 // initialise
 let initialize (game : game) =
   // Spawn some snakes
-  Seq.init snake_total (fun i -> spawn_random_snake (AI.alpha_slither_random_weights ())) |> snakes.AddRange
+  if init_snakes_from_json then
+    let ws = json_load_weights @"..\..\evolved_weights.json"
+    for x in ws do genepool.Enqueue x
+    Seq.init snake_total (fun i -> spawn_crossover_snake ()) |> snakes.AddRange
+  else
+    Seq.init snake_total (fun i -> spawn_random_snake (AI.alpha_slither_random_weights ())) |> snakes.AddRange  
   // Initialise the walls
   let width = world_size
   let height = world_size
@@ -534,7 +544,8 @@ let update (game, gameTime : GameTime) =
       match player.controller with Human -> AI.alpha_slither_random_weights () | _ -> Human
   last_frame_keyboard <- keystate
   // JSON
-  if gameTime.ElapsedGameTime.Minutes > last_dump_time + 10 then
+  if gameTime.TotalGameTime.Minutes > last_dump_time + 10 then
+    last_dump_time <- last_dump_time + 10
     json_dump_weights ()
   // simulation
   if run_fast then
