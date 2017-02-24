@@ -13,6 +13,14 @@ type CircularQueue<'t> with
   member x.PeekLast = x.[x.Count-1]
   member x.FromBack i = x.[x.Count - (i+1)]
 
+[<StructAttribute>]
+type Action =
+  val dir : Vector2
+  val mode : movement_mode
+  new(dir, mode) = 
+    { dir = dir
+      mode = mode }
+
 type snake = {
     mutable direction : Vector2
     mutable energy : float32
@@ -24,9 +32,10 @@ type snake = {
     mutable segment_gap : float32
     mutable segment_size : float32
     mutable poop_cycle : int
+    mutable ai : game -> snake -> Action
   }
 
-let create_snake direction head colour =
+let create_snake direction head colour ai =
   {
     direction = direction
     energy = 200.f
@@ -38,6 +47,7 @@ let create_snake direction head colour =
     segment_size = 30.f
     segment_gap = 20.f
     poop_cycle = 0
+    ai = ai
   }
 
 [<StructAttribute>]

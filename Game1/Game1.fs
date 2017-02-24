@@ -28,7 +28,6 @@ open CollisionGrid
 
 // ################## GAME STATE #################
 
-let mutable prev_mouse = new MouseState ()
 let random = new System.Random (50)
 let snake_total = 40
 let snakes = MList<snake>()
@@ -48,6 +47,41 @@ let mutable snake_grid = CollisionGrid<Segment>(collision_tile_size)
 let dead_food = MList<int>()
 let dead_snakes = MList<int>()
 
+// ################### GAME AI ###################
+
+module AI =
+
+  let player_control (game : game) s =
+    let screen_centre = get_screen_size(game) / 2.f
+    let mouse = Mouse.GetState ()
+    let bounds = game.RenderBounds
+    let dir =
+      if mouse.X > 0 && mouse.X < bounds.Width &&
+          mouse.Y > 0 && mouse.Y < bounds.Height then
+        let mouse_world_pos = Vector2(float32 mouse.X, float32 mouse.Y) + s.head - screen_centre
+        mouse_world_pos - s.head
+      else
+        s.direction
+    let mode = if mouse.LeftButton = ButtonState.Pressed then FastMove else NormalMove
+    Action (dir, mode)
+
+  let dumb_ai game s =
+    let fs =
+      food_grid.IterateSquare(s.head, 200.f)
+      |> Seq.map (fun i -> food.[i])
+      |> Seq.map (fun f -> f, (f.pos - s.head).Length() / f.energy)
+    let pos =
+      if Seq.isEmpty fs |> not then
+        (fs |> Seq.minBy snd |> fst).pos
+      else
+        let i = (s.colour.GetHashCode() |> abs) % snakes.Count
+        let enemy = snakes.[i]
+        let enemy_dir = enemy.direction
+        enemy_dir.Normalize()
+        enemy.head + enemy_dir * 100.f
+    let dir = pos - s.head
+    Action (dir, NormalMove)
+
 // ###############################################
 
 let energy_to_length energy = sqrt (energy * 100.f)
@@ -56,7 +90,7 @@ let random_color (random : System.Random) =
   let c () = random.NextFloat() * 0.5f + 0.5f
   Color(c(), c(), c())
 
-// helper function for interpolating snake body positions
+/// helper function for interpolating snake body positions
 let get_position_at_length_helper (s, length, first_waypoint_to_head, first_waypoint_to_head_length) =
   let distance_from_first_waypoint_to_segment = length - first_waypoint_to_head_length
   if distance_from_first_waypoint_to_segment <= 0.f then
@@ -72,13 +106,13 @@ let get_position_at_length_helper (s, length, first_waypoint_to_head, first_wayp
     else
       s.waypoints.[0]
 
-// interpolate snake body positions
+/// interpolate snake body positions
 let get_position_at_length (s, length) =
   let first_waypoint_to_head = s.head - s.waypoints.PeekLast
   let first_waypoint_to_head_length = first_waypoint_to_head.Length()
   get_position_at_length_helper(s, length, first_waypoint_to_head, first_waypoint_to_head_length)
 
-// helper function for iterating over the positions in a snake
+/// helper function for iterating over the positions in a snake
 let iter_snake s =
   seq {
     let first_waypoint_to_head = s.head - s.waypoints.PeekLast
@@ -92,25 +126,29 @@ let iter_snake s =
       yield pos
   }
 
+/// Used to fade a snake's colour a bit for food created from its body
 let colour_fade (c : Color) =
   let v = c.ToVector3()
   let factor = ((v.X + v.Y + v.Z) / 3.f) / 0.6f
   v / factor |> Color
 
-let rec spawn_random_snake (random : System.Random) =
+/// Spawn a snake somewhere. Try to avoid other snakes.
+let rec spawn_random_snake (random : System.Random) ai =
   let angle = random.NextDouble() * Math.PI * 2.0
   let direction = Vector2(Math.Cos angle |> float32, Math.Sin angle |> float32)
   let head_pos = Vector2(world_size * random.NextFloat(), world_size * random.NextFloat())
-  let too_close = snakes.Exists(fun s -> (s.head - head_pos).LengthSquared() < 100.f)
+  let too_close = snakes.Exists(fun s -> (s.head - head_pos).LengthSquared() < 150.f * 150.f)
   if too_close then
-    spawn_random_snake random
+    spawn_random_snake random ai
   else
     let colour = random_color random
-    create_snake direction head_pos colour
+    create_snake direction head_pos colour ai
 
+/// Spawn food with standard time-to-live
 let spawn_food (colour, pos, energy) =
   Food(pos, colour, energy, total_ticks + 1000 + random.Next(2000))
 
+/// Turn a dead snake's carcass into an appropriately-sized pile of food
 let spawn_dead_snake_food s =
   let spawn_positions = iter_snake s |> Seq.toArray
   let length_factor = 10.f * (s.segment_size / 30.f)
@@ -129,7 +167,7 @@ let spawn_dead_snake_food s =
 // initialise
 let initialize (game : game) =
   // Spawn some snakes
-  Seq.init snake_total (fun i -> spawn_random_snake random) |> snakes.AddRange
+  Seq.init snake_total (fun i -> spawn_random_snake random AI.dumb_ai) |> snakes.AddRange
   // Initialise the walls
   let width = world_size
   let height = world_size
@@ -143,7 +181,7 @@ let initialize (game : game) =
     boundary_grid.AddRectangle(w.Left, w.Top, w.Right, w.Bottom, w)
 
 // Handle movement
-let handle_movement s =
+let handle_movement_speed s =
   s.speed <-
     match s.movement_mode with
       | NormalMove -> 5.f
@@ -206,16 +244,7 @@ let update (game : game, gameTime : GameTime) =
   total_ticks <- total_ticks + 1
 
   let player = snakes.[0]
-  let screen_centre = get_screen_size(game) / 2.f
-
-  // Update the player direction
-  let mouse = Mouse.GetState ()
-  let bounds = game.RenderBounds
-  if mouse.X > 0 && mouse.X < bounds.Width &&
-      mouse.Y > 0 && mouse.Y < bounds.Height then
-    let mouse_world_pos = Vector2(float32 mouse.X, float32 mouse.Y) + player.head - screen_centre
-    change_direction player (mouse_world_pos - player.head)
-  player.movement_mode <- if mouse.LeftButton = ButtonState.Pressed then FastMove else NormalMove
+  player.ai <- AI.player_control
 
   // Moderate the food level
   do // Make some food
@@ -242,26 +271,17 @@ let update (game : game, gameTime : GameTime) =
 
   // Add more snakes
   if snakes.Count < snake_total then
-    snakes.Add (spawn_random_snake random)
+    snakes.Add (spawn_random_snake random AI.dumb_ai)
 
   // Update positions and size
   for i = 0 to snakes.Count-1 do
     let s = snakes.[i]
-    // Terrible AI
-    if i > 0 then
-      let fs =
-        food_grid.IterateSquare(s.head, 200.f)
-        |> Seq.map (fun i -> food.[i])
-        |> Seq.map (fun f -> f, (f.pos - s.head).Length() / f.energy)
-      let pos =
-        if Seq.isEmpty fs |> not then
-          (fs |> Seq.minBy snd |> fst).pos
-        else
-          let enemy = snakes.[(i + 1) % snakes.Count]
-          enemy.head + enemy.direction * 100.f
-      change_direction s (pos - s.head)
+    // Run AI
+    let action = s.ai game s
+    change_direction s action.dir
+    s.movement_mode <- action.mode
     // Update the snake's speed
-    handle_movement s
+    handle_movement_speed s
     // Move the snake
     let dir = s.direction
     dir.Normalize()
@@ -338,8 +358,6 @@ let update (game : game, gameTime : GameTime) =
     if collision then
       spawn_dead_snake_food s
       dead_snakes.Add i
-
-  prev_mouse <- mouse
 
 // Draw the game
 let draw (game : game, gameTime : GameTime) =

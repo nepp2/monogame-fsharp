@@ -20,6 +20,7 @@ type Color = Microsoft.Xna.Framework.Color
 type Point = Microsoft.Xna.Framework.Point
 type GameTime = Microsoft.Xna.Framework.GameTime
 
+/// Mutable list (alias for C# List)
 type MList<'a> = System.Collections.Generic.List<'a>
 
 type private Game1 () =
