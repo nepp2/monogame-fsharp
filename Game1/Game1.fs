@@ -1,164 +1,34 @@
 ﻿module Game
 
-open Microsoft.Xna.Framework
-open Microsoft.Xna.Framework.Graphics
-open Microsoft.Xna.Framework.Content
-open Microsoft.Xna.Framework.Input
-open MonoGame.Extended.Shapes
-open System.Threading
 open System.IO
 open System.Collections.Generic
 open System
-open C5
 
-type Game1 () =
-  inherit Game()
+open Engine
+open GameTypes
+open Utils
+open CollisionGrid
 
-  member val initialise = (fun _ -> ()) with get, set
-  member val update = (fun _ -> ()) with get, set
-  member val draw = (fun _ -> ()) with get, set
-  member val load_content = (fun _ -> ()) with get, set
+(*
+####### MISSING FEATURES #######
 
-  override x.Initialize() =
-    base.Initialize()
-    x.initialise x
+- There should be a maximum turning speed
+- AI snakes don't do anything
+  - Grazing behaviour
+  - Avoidance behaviour
+  - Attacking behaviour
+  - (Evolve the weightings of these parameters?)
 
-  override x.LoadContent() = x.load_content x
-  override x.Update (gameTime) = x.update (x, gameTime)
-  override x.Draw (gameTime) = x.draw (x, gameTime)
+####### BUGGY CRAP #######
 
-// Define a snake
+- tile lookups may be incorrect in negative space
+  - (there is no negative space anymore, so it probably doesn't matter)
 
-type MList<'a> = List<'a>
-
-type movement_mode = NormalMove | FastMove
-
-type snake = {
-    mutable direction : Vector2
-    mutable energy : float32
-    mutable movement_mode : movement_mode
-    mutable speed : float32
-    mutable head : Vector2
-    waypoints : CircularQueue<Vector2>
-    mutable colour : Color
-    mutable segment_gap : float32
-    mutable segment_size : float32
-    mutable poop_cycle : int
-  }
-
-[<StructAttribute>]
-type Food =
-  val pos : Vector2
-  val colour : Color
-  val energy : float32
-  val time_of_expiry : int
-  new(pos, colour, energy, time_of_expiry) = 
-    { pos = pos
-      colour = colour
-      energy = energy
-      time_of_expiry = time_of_expiry }
-
-type CollisionGrid<'a> (collision_tile_size) =
-  let grid = Dictionary<Point, MList<'a>>()
-  with
-    member this.Clear () =
-      grid.Clear()
-
-    member private this.get_tile_index pos =
-      // TODO this calculation may be wrong on negative side of axis
-      pos / collision_tile_size |> int
-
-    member this.IterateRectangle (left, top, right, bottom) = seq {
-      let left = this.get_tile_index left
-      let top = this.get_tile_index top
-      let right = this.get_tile_index right
-      let bottom = this.get_tile_index bottom
-      for x = left to right do
-        for y = top to bottom do
-          let p = Point(x, y)
-          if grid.ContainsKey p then yield! grid.[p]
-    }
-
-    member this.IterateSquare (pos : Vector2, size : float32) =
-      let half_size = size/2.f
-      let left = pos.X - half_size
-      let top = pos.Y- half_size
-      let right = pos.X + half_size
-      let bottom = pos.Y + half_size
-      this.IterateRectangle(left, top, right, bottom)
-
-    member private this.add_to_tile (tile, v) =
-      if not (grid.ContainsKey tile) then
-        grid.[tile] <- new MList<'a>()
-      grid.[tile].Add(v)
-
-    member this.AddPoint (pos : Vector2, v) =
-      let x = this.get_tile_index pos.X
-      let y = this.get_tile_index pos.Y
-      this.add_to_tile(Point(x, y), v)
-
-    member this.AddRectangle(left, top, right, bottom, v) =
-      let left = this.get_tile_index left
-      let top = this.get_tile_index top
-      let right = this.get_tile_index right
-      let bottom = this.get_tile_index bottom
-      for x = left to right do
-        for y = top to bottom do
-          this.add_to_tile(Point(x, y), v)
-
-    member this.AddSquare (centre : Vector2, size : float32, v) =
-      let half_size = size/2.f
-      let left = centre.X - half_size
-      let top = centre.Y- half_size
-      let right = centre.X + half_size
-      let bottom = centre.Y + half_size
-      this.AddRectangle(left, top, right, bottom, v)
-
-[<StructAttribute>]
-type Segment =
-  val pos : Vector2
-  val size : float32
-  val id : int
-  new(pos, size, id) = 
-    { pos = pos
-      size = size
-      id = id }
-
-let create_snake direction head colour =
-  {
-    direction = direction
-    energy = 200.f
-    movement_mode = NormalMove
-    speed = 0.f
-    head = head
-    waypoints = CircularQueue()
-    colour = colour
-    segment_size = 30.f
-    segment_gap = 20.f
-    poop_cycle = 0
-  }
-
-type System.Random with
-  member x.NextFloat() = x.NextDouble() |> float32
-
-type CircularQueue<'t> with
-  member x.PeekLast = x.[x.Count-1]
-  member x.FromBack i = x.[x.Count - (i+1)]
-
-let random_color (random : System.Random) =
-  let c () = random.NextFloat() * 0.5f + 0.5f
-  Color(c(), c(), c())
-
-let get_screen_size (game : Game1) =
-  Vector2(float32 game.Window.ClientBounds.Width, float32 game.Window.ClientBounds.Height)
-
-let degrees_to_radians d = d * (float32 Math.PI / 180.f)
-let radians_to_degrees r = r * (180.f / float32 Math.PI)
+*)
 
 // ################## GAME STATE #################
 
 let mutable prev_mouse = new MouseState ()
-let mutable spriteBatch : SpriteBatch = null
 let random = new System.Random (50)
 let snake_total = 40
 let snakes = MList<snake>()
@@ -181,6 +51,10 @@ let dead_snakes = MList<int>()
 // ###############################################
 
 let energy_to_length energy = sqrt (energy * 100.f)
+
+let random_color (random : System.Random) =
+  let c () = random.NextFloat() * 0.5f + 0.5f
+  Color(c(), c(), c())
 
 // helper function for interpolating snake body positions
 let get_position_at_length_helper (s, length, first_waypoint_to_head, first_waypoint_to_head_length) =
@@ -218,23 +92,6 @@ let iter_snake s =
       yield pos
   }
 
-(*
-####### MISSING FEATURES #######
-
-- There should be a maximum turning speed
-- AI snakes don't do anything
-  - Grazing behaviour
-  - Avoidance behaviour
-  - Attacking behaviour
-  - (Evolve the weightings of these parameters?)
-
-####### BUGGY CRAP #######
-
-- tile lookups may be incorrect in negative space
-  - (there is no negative space anymore, so it probably doesn't matter)
-
-*)
-
 let colour_fade (c : Color) =
   let v = c.ToVector3()
   let factor = ((v.X + v.Y + v.Z) / 3.f) / 0.6f
@@ -270,7 +127,7 @@ let spawn_dead_snake_food s =
     food.Add (spawn_food (colour, food_pos, length))
 
 // initialise
-let initialize (game : Game1) =
+let initialize (game : game) =
   // Spawn some snakes
   Seq.init snake_total (fun i -> spawn_random_snake random) |> snakes.AddRange
   // Initialise the walls
@@ -284,10 +141,6 @@ let initialize (game : Game1) =
       RectangleF(width, 0.f, thickness, height) ] // right
   for w in walls do
     boundary_grid.AddRectangle(w.Left, w.Top, w.Right, w.Bottom, w)
-
-// load the content
-let load_content (game : Game1) =
-  spriteBatch <- new SpriteBatch(game.GraphicsDevice)
 
 // Handle movement
 let handle_movement s =
@@ -347,7 +200,7 @@ let change_direction s dir =
       dir
 
 // Update the game
-let update (game : Game1, gameTime : GameTime) =
+let update (game : game, gameTime : GameTime) =
   clean_up_previous_frame ()
 
   total_ticks <- total_ticks + 1
@@ -357,8 +210,9 @@ let update (game : Game1, gameTime : GameTime) =
 
   // Update the player direction
   let mouse = Mouse.GetState ()
-  if mouse.X > 0 && mouse.X < game.Window.ClientBounds.Width &&
-      mouse.Y > 0 && mouse.Y < game.Window.ClientBounds.Height then
+  let bounds = game.RenderBounds
+  if mouse.X > 0 && mouse.X < bounds.Width &&
+      mouse.Y > 0 && mouse.Y < bounds.Height then
     let mouse_world_pos = Vector2(float32 mouse.X, float32 mouse.Y) + player.head - screen_centre
     change_direction player (mouse_world_pos - player.head)
   player.movement_mode <- if mouse.LeftButton = ButtonState.Pressed then FastMove else NormalMove
@@ -406,8 +260,6 @@ let update (game : Game1, gameTime : GameTime) =
           let enemy = snakes.[(i + 1) % snakes.Count]
           enemy.head + enemy.direction * 100.f
       change_direction s (pos - s.head)
-      if Single.IsNaN s.direction.X || Single.IsNaN s.direction.Y then
-        printf "whoopsie"
     // Update the snake's speed
     handle_movement s
     // Move the snake
@@ -490,7 +342,7 @@ let update (game : Game1, gameTime : GameTime) =
   prev_mouse <- mouse
 
 // Draw the game
-let draw (game : Game1, gameTime) =
+let draw (game : game, gameTime : GameTime) =
   let mouse = Mouse.GetState ()
    
   let screen_size = get_screen_size(game)
@@ -503,22 +355,16 @@ let draw (game : Game1, gameTime) =
   let draw_square (pos : Vector2, c : Color, size : float32) =
     let half_segment = size / 2.f
     let rect = RectangleF(pos.X - half_segment, pos.Y - half_segment, size, size)
-    spriteBatch.FillRectangle(rect, c)
+    game.FillRectangle(rect, c)
 
   // Draw a snake
   let draw_snake (camera : Vector2, s : snake) =
-    (*
-    // Draw dot trail
-    let dot_size = 4.f;
-    for i = 0 to s.waypoints.Count-1 do
-      draw_rect (s.waypoints.[i] + camera, Color.White, dot_size)
-    *)
     // Draw segments
     for pos in iter_snake s do
       draw_square (pos + camera, s.colour, s.segment_size)
   
-  Color(40, 40, 40) |> game.GraphicsDevice.Clear
-  spriteBatch.Begin();
+  Color(40, 40, 40) |> game.Clear
+  game.RenderBegin();
 
   // Draw a grid in the background
   let grid_colour = Color(0.1f, 0.1f, 0.1f)
@@ -529,10 +375,10 @@ let draw (game : Game1, gameTime) =
   let grid_offset_y = player_pos.Y % tile_size
   for x = 0 to grid_width do
     let x = (float32 x * tile_size) - grid_offset_x
-    spriteBatch.DrawLine(x, 0.f, x, screen_size.Y, grid_colour, 2.f)
+    game.DrawLine(x, 0.f, x, screen_size.Y, grid_colour, 2.f)
   for y = 0 to grid_height do
     let y = (float32 y * tile_size) - grid_offset_y
-    spriteBatch.DrawLine(0.f, y, screen_size.X, y, grid_colour, 2.f)
+    game.DrawLine(0.f, y, screen_size.X, y, grid_colour, 2.f)
       
   // Draw all of the snakes
   for i = 0 to snakes.Count-1 do
@@ -548,33 +394,13 @@ let draw (game : Game1, gameTime) =
   // Draw the walls
   for w in boundary_grid.IterateRectangle(screen.Left, screen.Top, screen.Right, screen.Bottom) do
     w.Offset(camera)
-    spriteBatch.FillRectangle(w, Color.Black)
+    game.FillRectangle(w, Color.Black)
 
   // Draw mouse
-  spriteBatch.DrawCircle(float32 mouse.X, float32 mouse.Y, 9.f, 4, Color.White, 3.f)
+  game.DrawCircle(float32 mouse.X, float32 mouse.Y, 9.f, 4, Color.White, 3.f)
 
-  spriteBatch.End();
+  game.RenderEnd();
 
-
-let spin_game_thread (game : Game1) =
-  do
-    let t = new Thread(new ThreadStart(fun _ -> game.Run()))
-    t.Start()
 
 let run_game () =
-
-  let game = new Game1 ()
-
-  let graphics = new GraphicsDeviceManager(game)
-  let mutable spriteBatch : SpriteBatch = null
-
-  graphics.PreferredBackBufferWidth <- 1920
-  graphics.PreferredBackBufferHeight <- 1080
-  graphics.ApplyChanges()
-
-  game.initialise <- initialize
-  game.load_content <- load_content
-  game.update <- update
-  game.draw <- draw
-  game.Run()
-
+  Engine.run_game (1280, 768, initialize, update, draw)

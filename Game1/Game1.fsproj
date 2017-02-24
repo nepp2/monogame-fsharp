@@ -55,13 +55,15 @@
   </Choose>
   <Import Project="$(FSharpTargetsPath)" />
   <ItemGroup>
+    <Compile Include="Engine.fs" />
+    <Compile Include="GameTypes.fs" />
+    <Compile Include="Utils.fs" />
+    <Compile Include="CollisionGrid.fs" />
     <Compile Include="Game1.fs" />
     <Compile Include="Program.fs" />
     <None Include="App.config" />
     <None Include="LoadReferences.fsx" />
-    <None Include="Game.fsx" />
     <Content Include="packages.config" />
-    <None Include="Snippets.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="C5">
