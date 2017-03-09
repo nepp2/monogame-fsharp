@@ -33,7 +33,7 @@ let random = new System.Random (50)
 let snake_total = 40
 let snakes = MList<snake>()
 let food = MList<Food>()
-let maximum_food = 20000
+let maximum_food = 5000
 let mutable total_ticks = 0L
 let world_size = 7000.f
 
@@ -621,4 +621,4 @@ let draw (game : game, gameTime : GameTime) =
 
 
 let run_game () =
-  Engine.run_game (1920, 1080, initialize, update, draw)
+  Engine.run_game (1980, 1080, false, initialize, update, draw)

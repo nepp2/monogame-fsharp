@@ -66,7 +66,7 @@ let get_screen_size (game : game) =
   let bounds = game.RenderBounds
   Vector2(float32 bounds.Width, float32 bounds.Height)
 
-let run_game (width, height, initialize, update, draw) =
+let run_game (width, height, fullscreen, initialize, update, draw) =
 
   let game = {
     monogame = new Game1 ()
@@ -77,9 +77,10 @@ let run_game (width, height, initialize, update, draw) =
     game.spriteBatch <- new SpriteBatch(game.monogame.GraphicsDevice)
 
   game.monogame.load_content <- load_content
-    
 
   let graphics = new GraphicsDeviceManager(game.monogame)
+
+  graphics.IsFullScreen <- fullscreen
 
   graphics.PreferredBackBufferWidth <- width
   graphics.PreferredBackBufferHeight <- height
