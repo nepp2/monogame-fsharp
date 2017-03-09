@@ -38,7 +38,8 @@ let mutable total_ticks = 0L
 let world_size = 7000.f
 
 let mutable last_dump_time = 0
-let init_snakes_from_json = true
+let init_snakes_from_json = false
+let save_snakes_to_json = false
 
 let max_turn_speed = 8.f
 let normal_speed = 4.f
@@ -544,9 +545,10 @@ let update (game, gameTime : GameTime) =
       match player.controller with Human -> AI.alpha_slither_random_weights () | _ -> Human
   last_frame_keyboard <- keystate
   // JSON
-  if gameTime.TotalGameTime.Minutes > last_dump_time + 10 then
-    last_dump_time <- last_dump_time + 10
-    json_dump_weights ()
+  if save_snakes_to_json then
+    if gameTime.TotalGameTime.Minutes > last_dump_time + 10 then
+      last_dump_time <- last_dump_time + 10
+      json_dump_weights ()
   // simulation
   if run_fast then
     let watch = System.Diagnostics.Stopwatch()
@@ -619,4 +621,4 @@ let draw (game : game, gameTime : GameTime) =
 
 
 let run_game () =
-  Engine.run_game (1280, 768, initialize, update, draw)
+  Engine.run_game (1920, 1080, initialize, update, draw)
